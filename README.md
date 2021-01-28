@@ -7,7 +7,6 @@ Por el otro los desarrollos de:
   /modelado
   /presentación
 
-
 # Como empezar
 
 ### Arquitectura
