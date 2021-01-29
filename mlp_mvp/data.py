@@ -75,6 +75,8 @@ def load_title_basics(path: Path):
 def load_title_ratings(path: Path):
     return pd.read_csv(path / 'title.ratings.tsv', sep='\t')
 
+def load_movie_gross(path: Path):
+    return pd.read_csv(path / 'movie_gross.csv', sep=',')
 
 def load_movie_directors(path: Path):
     # Me quedo solo con los que fueron directores
@@ -116,9 +118,10 @@ def load_data(path: Path):
     )
 
     movies = movies[~movies.averageRating.isna()].copy()
-
+    
+  
+    
     return movies
-
 
 def load_rating_train_dev_test(movies: pd.DataFrame, train_max_year=2015, dev_max_year=2017, sample_count: int = None):
     """
