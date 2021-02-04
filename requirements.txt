@@ -12,6 +12,8 @@ numpy==1.18.5
 pandas==1.1.4
 Cython==0.29.21
 
+selenium==3.141.0
+parsel==1.6.0
 
 
 tensorboard==2.4.0

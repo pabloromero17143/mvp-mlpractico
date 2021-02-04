@@ -1,0 +1,227 @@
+# Codigo distilado de la notebook clase-1/03_problem_framing_and_feature_engineering.ipynb
+
+import numpy as np
+from pathlib import Path
+import pandas as pd
+import requests
+import gzip
+import shutil
+
+
+def download_imdb_datasets(path: Path):
+    url = "https://datasets.imdbws.com/"
+    datasets = [
+        'name.basics.tsv.gz',
+        'title.akas.tsv.gz',
+        'title.basics.tsv.gz',
+        'title.crew.tsv.gz',
+        'title.principals.tsv.gz',
+        'title.ratings.tsv.gz',
+    ]
+    for dataset in datasets:
+        dataset_url = url + dataset
+        target_path = path / dataset
+        tsv_output_path = path / dataset[:-3]
+
+        if tsv_output_path.exists():
+            print("Dataset ya disponible")
+            continue
+
+        response = requests.get(dataset_url, stream=True)
+        if response.status_code == 200:
+            print(f'Descargando {dataset}...')
+            with open(target_path, 'wb') as file:
+                file.write(response.raw.read())
+
+            print(f'Descomprimiendo {dataset}...')
+            with gzip.open(target_path, 'rb') as file_in:
+                with open(tsv_output_path, 'wb') as file_out:
+                    shutil.copyfileobj(file_in, file_out)
+        else:
+            print(f"Error en la descargar. Status code:{response.status_code}")
+
+
+def load_title_basics(path: Path):
+    title_basics = pd.read_csv(path / 'title.basics.tsv', sep='\t', low_memory=False)
+
+    def parse_genres(genres):
+        if isinstance(genres, float) or genres == r'\N':
+            return ['no-genre']
+        else:
+            return genres.split(',')
+
+    # Convertimos runtimeMinutes a float. No se puede tener una columna de tipo int con NaN
+    title_basics.runtimeMinutes = (
+        title_basics.runtimeMinutes.apply(lambda x: np.nan if not x.isdigit() else x).astype(float)
+    )
+
+    title_basics['genres'] = title_basics.genres.apply(parse_genres)
+    title_basics['startYear'] = title_basics.startYear.apply(lambda x: np.nan if x == r'\N' else int(x))
+
+    title_basics = title_basics[
+        # Dejamos tvSpecial, video y tvMovie por ahora, vamos a ver de que se tratan
+        ~title_basics.titleType.isin(['tvEpisode', 'tvSeries', 'tvMiniSeries', 'videoGame', 'tvShort', 'short'])
+        # Que tengan valor de runtimeMinutes
+        & ~title_basics.runtimeMinutes.isna()
+        # Menos de 3 horas y media para no descartar a titanic
+        & (title_basics.runtimeMinutes <= 3.5 * 60)
+        # Descartamos los shorts
+        & title_basics.genres.apply(lambda x: 'Short' not in x)
+
+    ]
+#    title_basics['tconst'] = title_basics.movie_imdb_link.apply(lambda x: x.split('/')[4])
+    return title_basics
+
+
+def load_title_ratings(path: Path):
+    return pd.read_csv(path / 'title.ratings.tsv', sep='\t',low_memory=False)
+
+def load_movie_gross(path: Path):
+    return pd.read_csv(path / 'movie_gross.csv', sep=',')
+
+def load_movie_directors(path: Path):
+    # Me quedo solo con los que fueron directores
+    principals_df = pd.read_csv(path / 'title.principals.tsv', sep='\t')
+
+    movies_directors = principals_df[principals_df.category == 'director'].copy()
+    # Calculo un ranking por pelicula segun el ordering
+    movies_directors['director_rank'] = (
+        movies_directors.sort_values('ordering')
+            .groupby('tconst')
+            .cumcount()
+    )
+
+    # Me quedo con el "director principal" por pelicula
+    movies_directors = movies_directors[movies_directors.director_rank == 0]
+
+    # Me quedo solo con la columna del director
+    movies_directors = (
+        movies_directors.rename(columns={'nconst': 'director'})
+        [['tconst', 'director']]
+    )
+
+    return movies_directors
+
+
+def load_data(path: Path):
+    # Sacado del trabajo hecho en clase-1
+    print("Loading title basics...")
+    title_basics = load_title_basics(path)
+    
+    print("Loading title ratings...")
+    title_ratings = load_title_ratings(path)
+    
+    print("Loading movie directors...")
+    movie_directors = load_movie_directors(path)
+
+    print("Merging everything...")
+    movies = (
+        title_basics.merge(title_ratings, on='tconst') # descartamos aquellas que no tienen rating
+                    .merge(movie_directors, on='tconst', how='left')
+    )
+
+    movies = movies[~movies.averageRating.isna()].copy()
+    
+    return movies
+      
+def load_rating_train_dev_test(movies: pd.DataFrame, train_max_year=2015, dev_max_year=2017, sample_count: int = None):
+    """
+    :param movies: Movies dataframe
+    :param train_max_year: cut year for training
+    :param dev_max_year: cut year for dev (and starts test)
+    :param sample_count: whether to take a sample (useful for testing the code). Ignored when it is None
+    """
+    if sample_count:
+        movies = movies.sample(sample_count)
+
+    train_df = movies[movies.startYear <= train_max_year]
+    dev_df = movies[(movies.startYear > train_max_year) & (movies.startYear <= dev_max_year)]
+    test_df = movies[movies.startYear > dev_max_year]
+
+    X_train = train_df.to_dict(orient='records')
+    X_dev = dev_df.to_dict(orient='records')
+    X_test = test_df.to_dict(orient='records')
+
+    y_train = train_df.averageRating.values
+    y_dev = dev_df.averageRating.values
+    y_test = test_df.averageRating.values
+
+    return dict(X_train=X_train, y_train=y_train, X_dev=X_dev, y_dev=y_dev, X_test=X_test, y_test=y_test)
+
+
+# Este scraper trae data de budget en moneda unica
+def imdb_scrapper(path: Path):
+
+	# este va a ser mi archivo de salida
+	output_file = "imdb_scrapper.csv"
+	output_file_path = path / output_file	
+	
+	if output_file_path.exists():
+	    print("Dataset ya disponible")
+	    return pd.read_csv(path / 'imdb_scrapper.csv', sep=',')	    
+
+	# Scrapeo basic titles	
+	titles = load_title_basics(path)
+	
+	from selenium import webdriver
+	browser = webdriver.Chrome()	
+	from time import sleep
+	from parsel import Selector
+	
+	imdb_scrapper = pd.DataFrame(columns = ['tconst', 'budget', 'gross'])
+
+	# defino un par de listas donde voy a ir almacenando los datos del scrapper
+	tconst = []
+	budget = []
+	gross = []
+	# levanto data de iMDB
+
+	# Error checker
+	checker = 0
+
+	for title in titles.tconst[:5]:
+		
+		url = 'https://www.imdb.com/title/' + title
+		print("Retrieving: ", url)
+		
+		try:
+		    browser.get(url)
+		except:
+		    checker =+ 1
+		    if checker == 5:
+		        browser.quit()
+		    else:
+		        continue
+		    
+		sel = Selector(text=browser.page_source)
+		
+		tconst.append(title)
+		
+		presupuesto = sel.xpath('//div/h4[contains(text(),"Budget:")]/../text()').getall()
+		try:
+		    presupuesto = presupuesto[1].rstrip()
+		except:
+		    presupuesto = np.nan
+		budget.append(presupuesto)
+
+		revenue = sel.xpath('//div/h4[contains(text(),"Cumulative Worldwide Gross:")]/../text()').getall()
+		try:
+		    revenue = revenue[1].rstrip()
+		except:
+		    revenue = np.nan
+		gross.append(revenue)
+		    
+		sleep(1)
+		
+	browser.quit()	
+	
+	imdb_scrapper['tconst'] = tconst
+	imdb_scrapper['budget'] = budget
+	imdb_scrapper['gross'] = gross
+	
+	imdb_scrapper.to_csv(path / output_file, index=False, encoding = "utf-8")
+	return imdb_scrapper
+	
+if __name__ == '__main__':
+    PATH = Path('data')
+    download_imdb_datasets(PATH)
